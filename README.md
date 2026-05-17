@@ -1,40 +1,39 @@
-# Hash cracking
+# Cracking SHA-1 on a Grace Blackwell GPU
 
-This is the code for my [investigation](https://www.scheuclu.com/posts/password_hash_crack) on password hash cracking.
+A short hands-on investigation: how long does it really take to brute-force short, bare,
+unsalted SHA-1 hashes on modern hardware?
 
+> **Read the writeup with results and charts:**
+> **[scheuclu.github.io/hash_cracking](https://scheuclu.github.io/hash_cracking/)** &mdash;
+> generated from [`results.csv`](./results.csv).
+>
+> Background on the methodology: [scheuclu.com / password_hash_crack](https://www.scheuclu.com/posts/password_hash_crack).
 
-## Requirements
-- Working installation of [hashcat](https://hashcat.net/hashcat)
-  - You can automatically install hashcat by running `bash setup.sh`
-- Working installation of CUDA
-- [`uv`](https://docs.astral.sh/uv/) for Python environment and dependency management
+## What's in here
 
+| File | What it does |
+| --- | --- |
+| [`run_combos.py`](./run_combos.py) | Drives hashcat through a staged sweep of mask attacks. Captures per-config timing and crack rate to `results.csv`, full output to `runs/`. |
+| [`build_site.py`](./build_site.py) | Renders `results.csv` + project metadata into a self-contained `docs/index.html` (no JS, inline SVG chart). |
+| [`setup.sh`](./setup.sh) | Builds hashcat 7.1.2 from source. Required on ARM64 / aarch64 systems since hashcat ships x86_64 binaries only. |
+| [`hash_inputs.hash`](./hash_inputs.hash) | Three synthetic SHA-1 hashes (mode 100). Known plaintexts in `hash_inputs.solution` for self-verification. |
+| [`results.csv`](./results.csv) | Per-mask timing and crack data from the sweep on an NVIDIA GB10. |
 
-## Setup
+## Reproduce
+
+Requires Linux, an NVIDIA GPU with CUDA drivers, and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
+bash setup.sh                                      # builds hashcat 7.1.2 from source
+export HASHCAT_BIN=$HOME/hashcat-7.1.2/hashcat
 uv sync
+uv run hash-cracking                               # populates results.csv + runs/
+uv run python build_site.py                        # regenerates docs/index.html
 ```
 
-This will install Python 3.14 (pinned via `.python-version`) and the project dependencies into a local `.venv`.
+`uv` pins Python 3.14 via [`.python-version`](./.python-version). The `hash-cracking` runner
+honors `HASHCAT_BIN` (env) and falls back to `hashcat` on `PATH`.
 
-To enable Gmail status emails, drop your OAuth `token.json` into the project root and update the `RECIPIENT`/`SENDER` constants in `mail_remote.py`.
+## License
 
-
-## Usage
-
-The hashes that I am looking for are stored in [hash_inputs.hash](./hash_inputs.hash).
-
-Run hashcat through successively more compute-intensive configurations:
-
-```bash
-uv run hash-cracking
-```
-
-After each run, a status email is sent to my Gmail account so I am kept up to date with what hashes have been found.
-
-Send a single test email:
-
-```bash
-uv run send-mail
-```
+[MIT](./LICENSE).

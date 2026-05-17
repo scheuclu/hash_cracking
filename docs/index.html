@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cracking SHA-1 on a Grace Blackwell GPU</title>
+<meta name="description" content="What does it actually take to crack short bare SHA-1 hashes on a 2025-era NVIDIA GB10 GPU? A short investigation with timings.">
+<style>
+:root {
+  --ink: #0f172a;
+  --muted: #475569;
+  --line: #e2e8f0;
+  --bg: #fafaf9;
+  --accent: #0f766e;
+  --accent-bg: #f0fdfa;
+  --code-bg: #f1f5f9;
+}
+* { box-sizing: border-box; }
+html { font-size: 16px; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.6;
+}
+.wrap { max-width: 780px; margin: 0 auto; padding: 56px 24px 96px; }
+header.hero { padding: 24px 0 40px; border-bottom: 1px solid var(--line); margin-bottom: 40px; }
+h1 { font-size: 2.25rem; margin: 0 0 12px; letter-spacing: -0.02em; }
+h2 { font-size: 1.35rem; margin: 48px 0 16px; letter-spacing: -0.01em; }
+h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+p { margin: 0 0 16px; color: var(--ink); }
+.lede { font-size: 1.15rem; color: var(--muted); margin-bottom: 24px; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.8rem;
+       background: var(--accent-bg); color: var(--accent); border: 1px solid #99f6e4;
+       margin-right: 6px; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+              font-size: 0.9em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 14px 18px; border-radius: 8px;
+      overflow-x: auto; line-height: 1.45; }
+pre code { background: transparent; padding: 0; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid #99f6e4; }
+a:hover { border-bottom-color: var(--accent); }
+.verdict {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  padding: 20px; background: white; border: 1px solid var(--line);
+  border-radius: 12px; margin: 24px 0 32px;
+}
+.verdict .num { font-size: 1.6rem; font-weight: 600; color: var(--accent); display: block; }
+.verdict .lbl { font-size: 0.8rem; color: var(--muted); text-transform: uppercase;
+                letter-spacing: 0.04em; }
+table.results { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92rem; }
+table.results th { text-align: left; padding: 10px 8px; border-bottom: 2px solid var(--line);
+                   font-weight: 600; color: var(--muted); font-size: 0.85rem;
+                   text-transform: uppercase; letter-spacing: 0.04em; }
+table.results td { padding: 12px 8px; border-bottom: 1px solid var(--line);
+                   vertical-align: middle; }
+table.results td.mask code { background: transparent; padding: 0; }
+table.results th.num, table.results td.num { text-align: right; white-space: nowrap; }
+table.results tr.cracked td:last-child { color: var(--accent); font-weight: 600; }
+.bar-wrap { position: relative; display: inline-block; width: 120px; height: 18px;
+            background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+.bar-wrap .bar { position: absolute; top: 0; left: 0; bottom: 0;
+                 background: var(--accent); opacity: 0.18; }
+.bar-wrap span { position: relative; display: block; padding: 0 8px; line-height: 18px;
+                 font-size: 0.82rem; text-align: right; }
+.chart { width: 100%; height: auto; margin: 8px 0 32px; }
+.hash-list { background: white; border: 1px solid var(--line); border-radius: 8px;
+             padding: 14px 18px; margin: 16px 0; font-family: ui-monospace, monospace;
+             font-size: 0.85rem; line-height: 1.9; }
+.hash-list .crack { color: var(--accent); font-weight: 600; }
+.hash-list .nope { color: #94a3b8; }
+.callout { padding: 14px 18px; background: var(--accent-bg); border-left: 3px solid var(--accent);
+           border-radius: 4px; margin: 24px 0; }
+footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line);
+         color: var(--muted); font-size: 0.9rem; }
+@media (max-width: 540px) {
+  h1 { font-size: 1.7rem; }
+  .verdict { grid-template-columns: 1fr; }
+  .bar-wrap { width: 80px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <span class="tag">SHA-1</span><span class="tag">hashcat</span><span class="tag">NVIDIA GB10 (Grace Blackwell)</span>
+  <h1>How fast does a Grace Blackwell GPU chew through unsalted SHA-1?</h1>
+  <p class="lede">
+    A short, hands-on investigation: stage mask attacks of increasing keyspace against
+    three short synthetic passwords, measure where the wall is, and watch the cost curve.
+  </p>
+</header>
+
+<section>
+  <p>
+    When a service gets breached, the leaked database usually contains password
+    <em>hashes</em>, not the passwords themselves &mdash; a hash is a one-way function: easy
+    to compute forward, infeasible to reverse directly. But anyone holding the hashes can
+    guess passwords offline at GPU speed and check each guess against the leak. Whether
+    that takes seconds or geological time depends entirely on <em>how</em> the passwords
+    were hashed. This is a look at what "GPU speed" actually means in 2026, against the
+    weakest end of that spectrum: a single round of bare unsalted SHA-1.
+  </p>
+</section>
+
+<section>
+  <div class="verdict">
+    <div><span class="num">1/3</span>
+         <span class="lbl">hashes cracked</span></div>
+    <div><span class="num">27.8s</span>
+         <span class="lbl">fastest mask</span></div>
+    <div><span class="num">55.3m</span>
+         <span class="lbl">slowest measured</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>The targets</h2>
+  <p>Three synthetic 8-character passwords, hashed with a single round of bare unsalted SHA-1
+     (<code>-m 100</code>). They span the realistic surface that a hashcat mask attack can
+     reach: pure lowercase + digits, mixed case, and symbol-flanked.</p>
+  <div class="hash-list"><div><span class="crack">dd702c884ce8179f443aca343d61175408396b4f → tabletop</span></div><div><span class="nope">dd8a0212c9a8950ac116962cf2bf3b6746e95a79 → uncracked</span></div><div><span class="nope">7a0fd2b60e88468a60db9d8812b0cfa2d1f25700 → uncracked</span></div></div>
+  <p class="lede">One fell. The other two survived this round &mdash; not because the hash is strong, but
+     because the keyspace their pattern lives in is much bigger.</p>
+</section>
+
+<section>
+  <h2>Methodology</h2>
+  <p>A <strong>mask attack</strong> tells hashcat the shape of the password, not the password
+     itself, then enumerates every candidate that fits that shape. The shapes are stacked
+     cheapest-first:</p>
+  <ol>
+    <li><strong>Lowercase + digits</strong>, lengths 6&ndash;9. Charset of 36, keyspace grows
+        as 36<sup>L</sup>. Catches things like <code>tabletop</code> or <code>2faster</code>.</li>
+    <li><strong>Upper-prefixed</strong> &mdash; one capital up front, rest lowercase+digit.
+        Catches the <code>Password1</code>-style pattern.</li>
+    <li><strong>Symbol-flanked</strong> &mdash; uppercase/lowercase/symbol at the edges,
+        lowercase+digit in the middle. The kind of "complex" password humans actually
+        generate when forced to use symbols.</li>
+  </ol>
+  <p>This ordering matters: each step multiplies the keyspace by something like 30&ndash;100,
+     so the cost grows fast. You burn the cheap masks first because they take seconds, and you
+     only commit GPU-days to the expensive ones if you have to.</p>
+</section>
+
+<section>
+  <h2>Results</h2>
+  <p>What actually happened on the GB10:</p>
+  <table class="results">
+      <thead>
+        <tr>
+          <th>Mask</th>
+          <th class="num">Keyspace</th>
+          <th class="num">Time</th>
+          <th class="num">Effective rate</th>
+          <th class="num">Cracked</th>
+        </tr>
+      </thead>
+    <tbody>
+            <tr class="row">
+              <td class="mask"><code>SHA1 len=6 lowercase+digits</code></td>
+              <td class="num">2.2B</td>
+              <td class="num">
+                <div class="bar-wrap">
+                  <div class="bar" style="width:29.3%"></div>
+                  <span>27.8s</span>
+                </div>
+              </td>
+              <td class="num">78 MH/s</td>
+              <td class="num">0 / 3</td>
+            </tr>
+            
+            <tr class="row">
+              <td class="mask"><code>SHA1 len=7 lowercase+digits</code></td>
+              <td class="num">78.4B</td>
+              <td class="num">
+                <div class="bar-wrap">
+                  <div class="bar" style="width:42.2%"></div>
+                  <span>2.0m</span>
+                </div>
+              </td>
+              <td class="num">644 MH/s</td>
+              <td class="num">0 / 3</td>
+            </tr>
+            
+            <tr class="row cracked">
+              <td class="mask"><code>SHA1 len=8 lowercase+digits</code></td>
+              <td class="num">2.8T</td>
+              <td class="num">
+                <div class="bar-wrap">
+                  <div class="bar" style="width:71.3%"></div>
+                  <span>55.3m</span>
+                </div>
+              </td>
+              <td class="num">850 MH/s</td>
+              <td class="num">1 / 3</td>
+            </tr>
+            </tbody></table>
+  <p>The 8-character lowercase-and-digits mask is where the first crack landed:
+     <code class="mono">tabletop</code>, a dictionary word. It took 55.3m.
+     The next step in that family &mdash; length 9 with the same charset &mdash; would have
+     taken roughly a day and a half. At that point the right answer isn't "throw more
+     hashcat at it," it's "this mask family is wrong."</p>
+</section>
+
+<section>
+  <h2>The cost curve</h2>
+  <p>Same charset (lowercase + digits), one extra character at a time. Each step multiplies
+     the keyspace by 36, so on a log axis it's a straight line. The teal bars are measured;
+     the gray bars are projected at the GB10's observed peak rate of
+     857 MH/s.</p>
+  <svg viewBox="0 0 720 320" role="img" aria-label="Time to exhaust mask vs length" class="chart"><line x1="60" y1="226.7" x2="704" y2="226.7" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="3 3"/><text x="54" y="230.7" text-anchor="end" font-size="10" fill="#94a3b8">1m</text><line x1="60" y1="181.5" x2="704" y2="181.5" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="3 3"/><text x="54" y="185.5" text-anchor="end" font-size="10" fill="#94a3b8">1h</text><line x1="60" y1="146.3" x2="704" y2="146.3" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="3 3"/><text x="54" y="150.3" text-anchor="end" font-size="10" fill="#94a3b8">1d</text><line x1="60" y1="81.1" x2="704" y2="81.1" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="3 3"/><text x="54" y="85.1" text-anchor="end" font-size="10" fill="#94a3b8">1y</text><rect x="76.1" y="235.2" width="59.8" height="36.8" fill="#0f766e" stroke="#0f766e" stroke-width="1" rx="2"/><rect x="168.1" y="218.9" width="59.8" height="53.1" fill="#0f766e" stroke="#0f766e" stroke-width="1" rx="2"/><rect x="260.1" y="182.4" width="59.8" height="89.6" fill="#0f766e" stroke="#0f766e" stroke-width="1" rx="2"/><rect x="352.1" y="142.8" width="59.8" height="129.2" fill="#cbd5e1" stroke="#94a3b8" stroke-width="1" rx="2"/><rect x="444.1" y="103.2" width="59.8" height="168.8" fill="#cbd5e1" stroke="#94a3b8" stroke-width="1" rx="2"/><rect x="536.1" y="63.6" width="59.8" height="208.4" fill="#cbd5e1" stroke="#94a3b8" stroke-width="1" rx="2"/><rect x="628.1" y="24.0" width="59.8" height="248.0" fill="#cbd5e1" stroke="#94a3b8" stroke-width="1" rx="2"/><text x="106.0" y="229.2" text-anchor="middle" font-size="11" fill="#334155">27.8s</text><text x="106.0" y="288.0" text-anchor="middle" font-size="12" fill="#475569">len=6</text><text x="198.0" y="212.9" text-anchor="middle" font-size="11" fill="#334155">2.0m</text><text x="198.0" y="288.0" text-anchor="middle" font-size="12" fill="#475569">len=7</text><text x="290.0" y="176.4" text-anchor="middle" font-size="11" fill="#334155">55.3m</text><text x="290.0" y="288.0" text-anchor="middle" font-size="12" fill="#475569">len=8</text><text x="382.0" y="136.8" text-anchor="middle" font-size="11" fill="#334155">1.4d</text><text x="382.0" y="288.0" text-anchor="middle" font-size="12" fill="#475569">len=9</text><text x="474.0" y="97.2" text-anchor="middle" font-size="11" fill="#334155">49.4d</text><text x="474.0" y="288.0" text-anchor="middle" font-size="12" fill="#475569">len=10</text><text x="566.0" y="57.6" text-anchor="middle" font-size="11" fill="#334155">4.9y</text><text x="566.0" y="288.0" text-anchor="middle" font-size="12" fill="#475569">len=11</text><text x="658.0" y="18.0" text-anchor="middle" font-size="11" fill="#334155">175.3y</text><text x="658.0" y="288.0" text-anchor="middle" font-size="12" fill="#475569">len=12</text><rect x="60" y="6" width="10" height="10" fill="#0f766e" rx="2"/><text x="76" y="15" font-size="11" fill="#334155">measured</text><rect x="150" y="6" width="10" height="10" fill="#cbd5e1" stroke="#94a3b8" rx="2"/><text x="166" y="15" font-size="11" fill="#334155">projected @ 857 MH/s</text></svg>
+  <div class="callout">
+    <strong>Takeaway.</strong> Picking symbols doesn't save you. <em>Length</em> saves you.
+    Going from 8 to 12 lowercase-and-digit characters &mdash; same boring charset, just longer
+    &mdash; moves "an hour on a beefy GPU" to "longer than anyone reading this will be
+    alive." And that's before salting, before a slow KDF, before any of the things a real
+    password store should be doing.
+  </div>
+</section>
+
+<section>
+  <h2>Hardware</h2>
+  <p>The GPU is an <strong>NVIDIA GB10 (Grace Blackwell)</strong> &mdash; NVIDIA's 2025 ARM-based
+     workstation chip with unified CPU/GPU memory. Hashcat doesn't ship an ARM64 binary, so the
+     setup script in the repo builds 7.1.2 from source against the system CUDA toolkit.
+     Across the sweep it sustained ~857 MH/s on bare SHA-1.</p>
+</section>
+
+<section>
+  <h2>Reproduce</h2>
+<pre><code>git clone https://github.com/scheuclu/hash_cracking
+cd hash_cracking
+bash setup.sh                                      # builds hashcat 7.1.2 from source
+export HASHCAT_BIN=$HOME/hashcat-7.1.2/hashcat
+uv sync
+uv run hash-cracking</code></pre>
+  <p>Results stream to <code>results.csv</code> and per-config logs to <code>runs/</code>.
+     Re-running <code>python build_site.py</code> regenerates this page from the CSV.</p>
+</section>
+
+<footer>
+  Investigation writeup: <a href="https://www.scheuclu.com/posts/password_hash_crack">scheuclu.com/posts/password_hash_crack</a> &middot;
+  Source: <a href="https://github.com/scheuclu/hash_cracking">github.com/scheuclu/hash_cracking</a>
+</footer>
+
+</div>
+</body>
+</html>
