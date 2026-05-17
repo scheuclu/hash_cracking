@@ -1,20 +1,15 @@
 [project]
 name = "hash-cracking"
-version = "0.2.0"
-description = "Runs hashcat in successively more compute-intensive configurations and emails status updates via Gmail."
+version = "0.3.0"
+description = "Drives hashcat through staged mask attacks against SHA-1 hashes and captures timing + crack-rate results."
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [{ name = "Lukas Scheucher" }]
-dependencies = [
-    "google-api-python-client>=2.150",
-    "google-auth>=2.35",
-    "google-auth-oauthlib>=1.2",
-]
+dependencies = []
 
 [project.scripts]
 hash-cracking = "run_combos:main"
-send-mail = "mail_remote:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -22,7 +17,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = []
-include = ["mail_remote.py", "run_combos.py"]
+include = ["run_combos.py"]
 
 [tool.ruff]
 line-length = 100
