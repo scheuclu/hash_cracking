@@ -3,11 +3,7 @@
 A short hands-on investigation: how long does it really take to brute-force short, bare,
 unsalted SHA-1 hashes on modern hardware?
 
-> **Read the writeup with results and charts:**
-> **[scheuclu.github.io/hash_cracking](https://scheuclu.github.io/hash_cracking/)** &mdash;
 > generated from [`results.csv`](./results.csv).
->
-> Background on the methodology: [scheuclu.com / password_hash_crack](https://www.scheuclu.com/posts/password_hash_crack).
 
 ## What's in here
 
