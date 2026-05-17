@@ -1,69 +1,58 @@
-import os.path
+"""Send status emails via the Gmail API."""
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from __future__ import annotations
 
-# If modifying these scopes, delete the file token.json.
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send']
 import base64
 from email.message import EmailMessage
+from pathlib import Path
 
-CREDS_FILE='./token.json'
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
-def get_creds():
-    creds = Credentials.from_authorized_user_file(CREDS_FILE, SCOPES)
-    return creds
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 
-def message_from_string(content):
+CREDS_FILE = Path("./token.json")
+RECIPIENT = "<todo>@gmail.com"
+SENDER = "<todo>@gmail.com"
+
+
+def get_creds() -> Credentials:
+    return Credentials.from_authorized_user_file(str(CREDS_FILE), SCOPES)
+
+
+def _build_message(content: str) -> dict[str, str]:
     message = EmailMessage()
-
     message.set_content(content)
-    message['To'] = '<todo>@gmail.com'
-    message['From'] = '<todo>@gmail.com'
-    message['Subject'] = " "
-
-    # encoded message
-    encoded_message = base64.urlsafe_b64encode(message.as_bytes()) \
-        .decode()
-
-    create_message = {
-        'raw': encoded_message
-    }
-
-    return create_message
+    message["To"] = RECIPIENT
+    message["From"] = SENDER
+    message["Subject"] = " "
+    return {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
 
 
-def message_from_file(filepath):
-    with open(filepath, 'r') as f:
-        content = f.read()
-    return message_from_string(content)
+def _message_from_file(filepath: Path | str) -> dict[str, str]:
+    return _build_message(Path(filepath).read_text())
 
 
-def send_file_via_mail(filepath):
-    """Shows basic usage of the Gmail API.
-    Lists the user's Gmail labels.
-    """
-    creds = get_creds()
-    service = build('gmail', 'v1', credentials=creds)
-    message_body = message_from_file(filepath)
-    send_message = (service.users().messages().send
-                    (userId="me", body=message_body).execute())
-    print(F'Message Id: {send_message["id"]}')
-
-def send_string_via_mail(s):
-    """Shows basic usage of the Gmail API.
-    Lists the user's Gmail labels.
-    """
-    creds = get_creds()
-    service = build('gmail', 'v1', credentials=creds)
-    message_body = message_from_string(s)
-    send_message = (service.users().messages().send
-                    (userId="me", body=message_body).execute())
-    print(F'Message Id: {send_message["id"]}')
+def _send(body: dict[str, str]) -> None:
+    service = build("gmail", "v1", credentials=get_creds())
+    sent = service.users().messages().send(userId="me", body=body).execute()
+    print(f"Message Id: {sent['id']}")
 
 
-if __name__ == '__main__':
-    send_string_via_mail('This is a test.')
+def send_string_via_mail(content: str) -> None:
+    _send(_build_message(content))
+
+
+def send_file_via_mail(filepath: Path | str) -> None:
+    _send(_message_from_file(filepath))
+
+
+def main() -> None:
+    send_string_via_mail("This is a test.")
+
+
+if __name__ == "__main__":
+    main()
